@@ -173,6 +173,9 @@ def build_graph(
     def _compose_summary(state: dict) -> dict:
         return compose_summary_node(state, config=config, router=router)
 
+    def _schedule(state: dict) -> dict:
+        return schedule_node(state, config=config)
+
     # ── StateGraph ─────────────────────────────────────────────────────────────
     # GraphStateDict (TypedDict) as the state schema — required so LangGraph
     # preserves all fields across node boundaries (see GraphStateDict docstring).
@@ -187,7 +190,7 @@ def build_graph(
     graph.add_node("fairness_probe", _fairness_probe)
     graph.add_node("compose_summary", _compose_summary)
     graph.add_node("human_review", human_review_node)
-    graph.add_node("schedule", schedule_node)
+    graph.add_node("schedule", _schedule)
 
     # ── Fixed edges ────────────────────────────────────────────────────────────
     # START → setup_role → build_rubric → select_candidate

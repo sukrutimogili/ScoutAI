@@ -33,6 +33,7 @@ from typing import Any, Literal
 from scoutai.agent.harness import AgentHarness
 from scoutai.capabilities.fairness import compose_decision_summary, run_fairness_probe_on_shortlist
 from scoutai.capabilities.model_router import ModelRouter
+from scoutai.capabilities.scheduling import check_availability, propose_interview
 from scoutai.capabilities.role_requirements import SessionCache, extract_role_requirements, generate_rubric
 from scoutai.capabilities.screen_resume import apply_screen_result_to_candidate, screen_resume
 from scoutai.config import ScoutAIConfig
@@ -353,9 +354,114 @@ def route_after_human_review(state: dict[str, Any]) -> Literal["schedule", "sele
     return "END"
 
 
-def schedule_node(state: dict[str, Any]) -> dict[str, Any]:
+def schedule_node(state: dict[str, Any], config: ScoutAIConfig) -> dict[str, Any]:
     """
-    Schedule interview with approved candidates. Full implementation in S10.
+    Schedule interviews for approved candidates (S10).
+
+    For each candidate in the shortlist whose recommendation allows scheduling
+    (interview or strong_interview), check availability and propose an interview
+    slot.
+
+    Fixed node — deterministic (calendar API), not LLM-driven.
+    NOT callable by the agent (§7.4, ADR-9).
+
+    Uses the mock calendar backend by default (§12 Open Items).
+    Google Calendar backend is the documented upgrade path.
+
+    Args:
+        state:  Graph state with shortlist and candidates.
+        config: ScoutAI configuration.
+
+    Returns:
+        Updated state with slot information written to candidates.
     """
-    logger.info("schedule: stub (S10)")
-    return {"step_count": state.get("step_count", 0) + 1}
+    candidates_raw = state.get("candidates", [])
+    shortlist_raw = state.get("shortlist", [])
+
+    # Parse shortlist entries
+    shortlist = [
+        e if isinstance(e, ShortlistEntry) else ShortlistEntry.model_validate(e)
+        for e in shortlist_raw
+    ]
+
+    # Week start: next Monday from current time
+    from datetime import datetime as dt_mod, timezone as tz_mod, timedelta as td_mod
+    today = dt_mod.now(tz_mod.utc)
+    days_until_monday = (7 - today.weekday()) % 7 or 7
+    week_start = (today + td_mod(days=days_until_monday)).strftime("%Y-%m-%d")
+
+    schedulable_recommendations = {"interview", "strong_interview"}
+    updated_candidates = list(candidates_raw)
+
+    for entry in shortlist:
+        if entry.recommendation not in schedulable_recommendations:
+            logger.info(
+                "schedule: skipping candidate (non-interview recommendation)",
+                extra={"candidate": entry.candidate, "recommendation": entry.recommendation},
+            )
+            continue
+
+        try:
+            slots = check_availability(
+                candidate_id=entry.candidate,
+                week_start=week_start,
+                config=config,
+            )
+        except Exception as e:
+            logger.error(
+                "schedule: check_availability failed",
+                extra={"candidate": entry.candidate, "error": str(e)},
+            )
+            continue
+
+        if not slots:
+            logger.warning(
+                "schedule: no available slots for candidate",
+                extra={"candidate": entry.candidate, "week_start": week_start},
+            )
+            continue
+
+        try:
+            confirmation = propose_interview(
+                candidate_id=entry.candidate,
+                slot=slots[0],  # Use the first available slot
+                config=config,
+            )
+        except Exception as e:
+            logger.error(
+                "schedule: propose_interview failed",
+                extra={"candidate": entry.candidate, "slot": slots[0].start_iso, "error": str(e)},
+            )
+            continue
+
+        # Write slot info back to the corresponding candidate
+        for i, cand in enumerate(updated_candidates):
+            cid = cand.get("candidate_id") if isinstance(cand, dict) else getattr(cand, "candidate_id", "")
+            if cid == entry.candidate:
+                slot_info = {
+                    "start_iso": slots[0].start_iso,
+                    "end_iso": slots[0].end_iso,
+                    "confirmation_id": confirmation.confirmation_id,
+                    "status": confirmation.status,
+                }
+                if isinstance(updated_candidates[i], dict):
+                    updated_candidates[i] = {**updated_candidates[i], "slot": slot_info}
+                else:
+                    updated_candidates[i] = updated_candidates[i].model_copy(
+                        update={"slot": slot_info}
+                    )
+                break
+
+        logger.info(
+            "schedule: interview proposed",
+            extra={
+                "candidate": entry.candidate,
+                "slot_start": slots[0].start_iso,
+                "confirmation_id": confirmation.confirmation_id,
+            },
+        )
+
+    return {
+        "candidates": updated_candidates,
+        "step_count": state.get("step_count", 0) + 1,
+    }
