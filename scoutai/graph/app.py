@@ -85,6 +85,7 @@ class GraphStateDict(TypedDict, total=False):
     shortlist: list            # list[ShortlistEntry]
     bias_reports: list         # list[BiasReport]     — written by fairness_probe_node
     recruiter_summary: Any     # RecruiterSummary | None — written by compose_summary_node
+    human_review_decision: Any # dict — written by human_review_node, read by route_after_human_review
     trajectory: list           # list[TrajectoryEntry]
     step_count: int
     run_id: str

@@ -340,17 +340,237 @@ def compose_summary_node(state: dict[str, Any], config: ScoutAIConfig, router: M
 
 def human_review_node(state: dict[str, Any]) -> dict[str, Any]:
     """
-    Human-in-the-loop interrupt node. Full implementation in S11.
+    Human-in-the-loop interrupt node (§3.2, S11).
+
+    This node uses LangGraph's interrupt mechanism to pause execution and
+    wait for a human recruiter decision. The caller injects the decision
+    via the checkpointer's `Command` or by resuming the thread with input.
+
+    The node supports four actions (§3.2):
+    - approve:        Accept the recommendation as-is. Routes to schedule node.
+    - reject:         Reject the recommendation. Routes to END.
+    - edit_recommendation: Change the recommendation (e.g. interview→hold).
+                       Routes to END after applying the edit.
+    - request-more-evidence: Send a specific candidate back through the
+                       candidate_agent for another evaluation pass.
+                       The candidate's interview_rounds is reset for the
+                       reopened cycle only, and the reopen is logged as a
+                       human override (ADR-3).
+
+    The human_review_decision is written to state so the routing function
+    can determine the next node. The decision payload includes:
+    {
+        "action": "approve" | "reject" | "edit_recommendation" | "request-more-evidence",
+        "candidate_id": Optional[str],      # required for request-more-evidence
+        "new_recommendation": Optional[str], # required for edit_recommendation
+        "rationale": Optional[str],          # human's reasoning
+        "overridden_at": str                 # ISO 8601 timestamp
+    }
+
+    Spec references: §3.2, ADR-3.
     """
-    logger.info("human_review: stub (S11)")
-    return {"step_count": state.get("step_count", 0) + 1}
+    from langgraph.types import interrupt
+
+    shortlist_raw = state.get("shortlist", [])
+    shortlist = [
+        e if isinstance(e, ShortlistEntry) else ShortlistEntry.model_validate(e)
+        for e in shortlist_raw
+    ]
+
+    recruiter_summary = state.get("recruiter_summary")
+    bias_reports = state.get("bias_reports", [])
+
+    # Build the review payload presented to the human
+    review_payload = {
+        "shortlist": [
+            {
+                "candidate": e.candidate,
+                "recommendation": e.recommendation,
+                "weighted_score": e.weighted_score,
+                "strengths": e.strengths,
+                "remaining_uncertainties": e.remaining_uncertainties,
+                "evidence_refs_count": len(e.evidence_refs),
+            }
+            for e in shortlist
+        ],
+        "bias_reports_count": len(bias_reports),
+        "overall_recommendation": (
+            recruiter_summary.overall_recommendation
+            if hasattr(recruiter_summary, "overall_recommendation")
+            else None
+        ),
+        "message": (
+            "Review the shortlist above. Provide your decision: "
+            "approve, reject, edit_recommendation, or request-more-evidence."
+        ),
+    }
+
+    logger.info(
+        "human_review: waiting for human decision",
+        extra={
+            "shortlist_count": len(shortlist),
+            "bias_reports_count": len(bias_reports),
+        },
+    )
+
+    # Interrupt — execution pauses here. The caller resumes with a decision.
+    decision = interrupt(review_payload)
+
+    # Validate the decision structure
+    action = decision.get("action", "reject") if isinstance(decision, dict) else "reject"
+    candidate_id = decision.get("candidate_id") if isinstance(decision, dict) else None
+    new_recommendation = decision.get("new_recommendation") if isinstance(decision, dict) else None
+    rationale = decision.get("rationale") if isinstance(decision, dict) else None
+
+    valid_actions = {"approve", "reject", "edit_recommendation", "request-more-evidence"}
+    if action not in valid_actions:
+        logger.warning(
+            "human_review: invalid action, defaulting to 'reject'",
+            extra={"received_action": action},
+        )
+        action = "reject"
+
+    human_decision = {
+        "action": action,
+        "candidate_id": candidate_id,
+        "new_recommendation": new_recommendation,
+        "rationale": rationale,
+        "overridden_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    logger.info(
+        "human_review: decision received",
+        extra={
+            "action": action,
+            "candidate_id": candidate_id,
+            "new_recommendation": new_recommendation,
+        },
+    )
+
+    # Apply action outcomes
+    result_updates: dict[str, Any] = {
+        "human_review_decision": human_decision,
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+    if action == "edit_recommendation" and new_recommendation and shortlist:
+        # Update the shortlist entry with the new recommendation
+        updated_shortlist = list(shortlist)
+        if candidate_id:
+            # Update a specific candidate
+            found = False
+            for i, entry in enumerate(updated_shortlist):
+                if entry.candidate == candidate_id:
+                    updated_shortlist[i] = ShortlistEntry(
+                        candidate=entry.candidate,
+                        recommendation=new_recommendation,  # type: ignore[arg-type]
+                        weighted_score=entry.weighted_score,
+                        confidence_summary=entry.confidence_summary,
+                        strengths=entry.strengths,
+                        remaining_uncertainties=entry.remaining_uncertainties,
+                        evidence_refs=entry.evidence_refs,
+                    )
+                    found = True
+                    break
+            if not found:
+                # Candidate not found — update the last entry as fallback
+                last = updated_shortlist[-1]
+                updated_shortlist[-1] = ShortlistEntry(
+                    candidate=last.candidate,
+                    recommendation=new_recommendation,  # type: ignore[arg-type]
+                    weighted_score=last.weighted_score,
+                    confidence_summary=last.confidence_summary,
+                    strengths=last.strengths,
+                    remaining_uncertainties=last.remaining_uncertainties,
+                    evidence_refs=last.evidence_refs,
+                )
+        else:
+            # No candidate_id specified — update the last entry
+            last = updated_shortlist[-1]
+            updated_shortlist[-1] = ShortlistEntry(
+                candidate=last.candidate,
+                recommendation=new_recommendation,  # type: ignore[arg-type]
+                weighted_score=last.weighted_score,
+                confidence_summary=last.confidence_summary,
+                strengths=last.strengths,
+                remaining_uncertainties=last.remaining_uncertainties,
+                evidence_refs=last.evidence_refs,
+            )
+        result_updates["shortlist"] = updated_shortlist
+
+    if action == "request-more-evidence":
+        # Reset the targeted candidate's finalized flag and interview_rounds (ADR-3)
+        candidates = list(state.get("candidates", []))
+        updated_candidates = list(candidates)
+        for i, cand in enumerate(candidates):
+            cid = cand.get("candidate_id") if isinstance(cand, dict) else getattr(cand, "candidate_id", "")
+            if cid == candidate_id or (candidate_id is None and i == (state.get("current_idx", 0))):
+                if isinstance(cand, dict):
+                    updated_candidates[i] = {
+                        **cand,
+                        "finalized": False,
+                        "interview_rounds": 0,  # Reset for reopened cycle (ADR-3)
+                    }
+                else:
+                    updated_candidates[i] = cand.model_copy(
+                        update={"finalized": False, "interview_rounds": 0}
+                    )
+                logger.info(
+                    "human_review: candidate reset for re-evaluation",
+                    extra={"candidate_id": cid, "idx": i},
+                )
+                break
+        result_updates["candidates"] = updated_candidates
+
+    return result_updates
 
 
 def route_after_human_review(state: dict[str, Any]) -> Literal["schedule", "select_candidate", "END"]:
     """
-    Conditional edge after human_review. Full implementation in S11.
-    Returns END by default in stub.
+    Conditional edge after human_review (§3.2, S11).
+
+    Routing rules:
+    - approve  → schedule (if recommendation allows interview/strong_interview)
+    - approve  → END (if recommendation is reject/hold)
+    - reject   → END
+    - edit_recommendation → END (changes applied directly in the node)
+    - request-more-evidence → select_candidate (re-opens candidate for re-evaluation)
+
+    When routing to select_candidate (request-more-evidence), the targeted
+    candidate's 'finalized' flag and 'interview_rounds' are reset. This is
+    logged as a human override (ADR-3).
     """
+    decision = state.get("human_review_decision")
+    if not isinstance(decision, dict):
+        logger.warning("route_after_human_review: no decision found, defaulting to END")
+        return "END"
+
+    action = decision.get("action", "reject")
+
+    if action == "approve":
+        # Check if any shortlist entry has a schedulable recommendation
+        shortlist_raw = state.get("shortlist", [])
+        schedulable = {"interview", "strong_interview"}
+        for entry in shortlist_raw:
+            rec = entry.get("recommendation") if isinstance(entry, dict) else getattr(entry, "recommendation", "")
+            if rec in schedulable:
+                logger.info("route_after_human_review: approved with interview recommendation → schedule")
+                return "schedule"
+        logger.info("route_after_human_review: approved without interview recommendation → END")
+        return "END"
+
+    if action == "request-more-evidence":
+        candidate_id = decision.get("candidate_id")
+        logger.info(
+            "route_after_human_review: requesting more evidence for candidate",
+            extra={"candidate_id": candidate_id},
+        )
+        # Candidate reset is handled in human_review_node. Route to select_candidate
+        # so the per-candidate loop finds the re-opened candidate.
+        return "select_candidate"
+
+    # reject, edit_recommendation, or any other action → END
+    logger.info("route_after_human_review: no further processing → END")
     return "END"
 
 
