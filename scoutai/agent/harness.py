@@ -40,6 +40,7 @@ from typing import Any, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from scoutai.audit.metrics import MetricsCollector
 from scoutai.capabilities.evidence import (
     assess_capabilities,
     extract_evidence,
