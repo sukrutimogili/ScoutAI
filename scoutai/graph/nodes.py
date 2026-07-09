@@ -31,11 +31,12 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from scoutai.agent.harness import AgentHarness
+from scoutai.capabilities.fairness import compose_decision_summary, run_fairness_probe_on_shortlist
 from scoutai.capabilities.model_router import ModelRouter
 from scoutai.capabilities.role_requirements import SessionCache, extract_role_requirements, generate_rubric
 from scoutai.capabilities.screen_resume import apply_screen_result_to_candidate, screen_resume
 from scoutai.config import ScoutAIConfig
-from scoutai.schemas import CandidateState, GraphState
+from scoutai.schemas import CandidateState, GraphState, RecruiterSummary, ShortlistEntry
 
 logger = logging.getLogger(__name__)
 
@@ -259,19 +260,81 @@ def candidate_agent_node(state: dict[str, Any], config: ScoutAIConfig, router: M
 
 def fairness_probe_node(state: dict[str, Any], config: ScoutAIConfig, router: ModelRouter) -> dict[str, Any]:
     """
-    Run fairness probe on shortlisted candidates (ADR-7).
-    Full implementation in S9.
+    Run fairness probe on shortlisted candidates (ADR-7, S9).
+
+    Operates on the shortlist only — the expensive counterfactual bias check is
+    reserved for candidates that are being seriously considered (ADR-7).
+    Runs pairwise comparisons across all adjacent shortlist pairs.
     """
-    logger.info("fairness_probe: stub (S9)")
-    return {"step_count": state.get("step_count", 0) + 1}
+    shortlist_raw = state.get("shortlist", [])
+    shortlist = [
+        e if isinstance(e, ShortlistEntry) else ShortlistEntry.model_validate(e)
+        for e in shortlist_raw
+    ]
+
+    logger.info(
+        "fairness_probe: running probes on shortlist",
+        extra={"shortlist_count": len(shortlist)},
+    )
+
+    bias_reports = run_fairness_probe_on_shortlist(shortlist, config, router)
+
+    logger.info(
+        "fairness_probe: completed",
+        extra={"reports_generated": len(bias_reports)},
+    )
+
+    return {
+        "bias_reports": bias_reports,
+        "step_count": state.get("step_count", 0) + 1,
+    }
 
 
 def compose_summary_node(state: dict[str, Any], config: ScoutAIConfig, router: ModelRouter) -> dict[str, Any]:
     """
-    Compose recruiter decision summary. Full implementation in S9.
+    Compose recruiter decision summary (§4.1, S9).
+
+    Uses the high_context model role (1x per session).
+    Every claim in the summary must cite evidence_refs — enforced by the
+    RecruiterSummary schema and the compose_decision_summary capability (§4.1).
     """
-    logger.info("compose_summary: stub (S9)")
-    return {"step_count": state.get("step_count", 0) + 1}
+    shortlist_raw = state.get("shortlist", [])
+    shortlist = [
+        e if isinstance(e, ShortlistEntry) else ShortlistEntry.model_validate(e)
+        for e in shortlist_raw
+    ]
+
+    bias_reports_raw = state.get("bias_reports", [])
+    from scoutai.schemas import BiasReport
+    bias_reports = [
+        r if isinstance(r, BiasReport) else BiasReport.model_validate(r)
+        for r in bias_reports_raw
+    ]
+
+    run_id = state.get("run_id", "")
+
+    logger.info(
+        "compose_summary: generating recruiter summary",
+        extra={"shortlist_count": len(shortlist), "bias_reports": len(bias_reports)},
+    )
+
+    summary = compose_decision_summary(
+        shortlist=shortlist,
+        bias_reports=bias_reports,
+        config=config,
+        router=router,
+        run_id=run_id,
+    )
+
+    logger.info(
+        "compose_summary: completed",
+        extra={"evidence_refs_count": len(summary.evidence_refs)},
+    )
+
+    return {
+        "recruiter_summary": summary,
+        "step_count": state.get("step_count", 0) + 1,
+    }
 
 
 def human_review_node(state: dict[str, Any]) -> dict[str, Any]:
