@@ -39,9 +39,8 @@ ADR references: ADR-4 (deterministic outer graph), ADR-9 (agent in one node).
 
 from __future__ import annotations
 
-import functools
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -67,6 +66,28 @@ from scoutai.graph.nodes import (
 logger = logging.getLogger(__name__)
 
 
+# ── Graph state schema ─────────────────────────────────────────────────────────
+# TypedDict is required here (not plain dict) so LangGraph 0.2 preserves every
+# key across node boundaries. With StateGraph(dict), LangGraph only tracks keys
+# that appear in at least one node's return value — any key a node never writes
+# is silently dropped on the next state merge. TypedDict declares the full schema
+# upfront so all keys survive node transitions regardless of which node wrote them.
+#
+# The field names and types mirror GraphState in §5 (scoutai/schemas/types.py).
+# We use Any here to avoid circular import / Pydantic coupling at the graph level;
+# nodes cast to typed Pydantic models internally.
+class GraphStateDict(TypedDict, total=False):
+    jd: str
+    role_profile: Any          # RoleProfile | None
+    rubric: Any                # Rubric | None
+    candidates: list           # list[CandidateState]
+    current_idx: int
+    shortlist: list            # list[ShortlistEntry]
+    trajectory: list           # list[TrajectoryEntry]
+    step_count: int
+    run_id: str
+
+
 def build_graph(
     config: ScoutAIConfig,
     router: ModelRouter,
@@ -83,9 +104,15 @@ def build_graph(
     runs the full hiring pipeline from JD ingestion through to shortlist output.
 
     Dependency injection:
-        All nodes that need config/router/cache receive them via functools.partial
-        at graph-build time. LangGraph passes only `state: dict` to nodes —
-        injecting dependencies this way keeps nodes testable and avoids globals.
+        Nodes that need config/router/cache are wrapped in single-argument
+        closures defined inside this function. LangGraph 0.2 calls node
+        functions with (state, runnable_config) — two positional arguments.
+        Using functools.partial(node_fn, config=config) would cause
+        "got multiple values for argument 'config'" because LangGraph always
+        injects its own RunnableConfig dict as the second positional.
+        Closures avoid this entirely: each ``_wrapper(state)`` function
+        captures config/router/cache from the enclosing scope and calls the
+        real node with them as keyword arguments.
 
     recursion_limit:
         Per §3.3, the outer graph is capped at 40 recursive steps. This is passed
@@ -117,43 +144,46 @@ def build_graph(
     if cache is None:
         cache = SessionCache(config)
 
-    # ── Bind config/router/cache into nodes via functools.partial ─────────────
-    # LangGraph node callables receive only (state: dict) → dict.
-    # We close over config/router/cache here so each node is a clean function.
+    # ── Bind config/router/cache into nodes via closures ──────────────────────
+    # LangGraph 0.2 calls node functions with (state, runnable_config) — it
+    # always passes its internal RunnableConfig dict as a second positional arg.
+    # functools.partial(node_fn, config=config, router=router) would cause
+    # "got multiple values for argument 'config'" when LangGraph injects its
+    # own second positional. We use explicit lambda closures instead so the
+    # inner call only exposes `state` to LangGraph, and config/router are
+    # captured from the enclosing scope — no name collision possible.
 
-    setup_role = functools.partial(
-        setup_role_node, config=config, router=router, cache=cache
-    )
-    build_rubric = functools.partial(
-        build_rubric_node, config=config, router=router, cache=cache
-    )
-    screen_resume = functools.partial(
-        screen_resume_node, config=config, router=router
-    )
-    candidate_agent = functools.partial(
-        candidate_agent_node, config=config, router=router
-    )
-    fairness_probe = functools.partial(
-        fairness_probe_node, config=config, router=router
-    )
-    compose_summary = functools.partial(
-        compose_summary_node, config=config, router=router
-    )
-    # select_candidate, human_review, schedule take only state — no extra deps.
+    def _setup_role(state: dict) -> dict:
+        return setup_role_node(state, config=config, router=router, cache=cache)
+
+    def _build_rubric(state: dict) -> dict:
+        return build_rubric_node(state, config=config, router=router, cache=cache)
+
+    def _screen_resume(state: dict) -> dict:
+        return screen_resume_node(state, config=config, router=router)
+
+    def _candidate_agent(state: dict) -> dict:
+        return candidate_agent_node(state, config=config, router=router)
+
+    def _fairness_probe(state: dict) -> dict:
+        return fairness_probe_node(state, config=config, router=router)
+
+    def _compose_summary(state: dict) -> dict:
+        return compose_summary_node(state, config=config, router=router)
 
     # ── StateGraph ─────────────────────────────────────────────────────────────
-    # Plain dict as the state schema. LangGraph merges node return dicts into
-    # state automatically; validated Pydantic models are used inside nodes.
-    graph = StateGraph(dict)
+    # GraphStateDict (TypedDict) as the state schema — required so LangGraph
+    # preserves all fields across node boundaries (see GraphStateDict docstring).
+    graph = StateGraph(GraphStateDict)
 
     # ── Nodes ──────────────────────────────────────────────────────────────────
-    graph.add_node("setup_role", setup_role)
-    graph.add_node("build_rubric", build_rubric)
+    graph.add_node("setup_role", _setup_role)
+    graph.add_node("build_rubric", _build_rubric)
     graph.add_node("select_candidate", select_candidate_node)
-    graph.add_node("screen_resume", screen_resume)
-    graph.add_node("candidate_agent", candidate_agent)
-    graph.add_node("fairness_probe", fairness_probe)
-    graph.add_node("compose_summary", compose_summary)
+    graph.add_node("screen_resume", _screen_resume)
+    graph.add_node("candidate_agent", _candidate_agent)
+    graph.add_node("fairness_probe", _fairness_probe)
+    graph.add_node("compose_summary", _compose_summary)
     graph.add_node("human_review", human_review_node)
     graph.add_node("schedule", schedule_node)
 
