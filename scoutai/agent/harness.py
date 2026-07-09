@@ -499,16 +499,40 @@ class AgentHarness:
         latency_ms: int,
         model: Optional[str],
         status: str,
+        *,
+        input_data: Any = None,
+        output_data: Any = None,
     ) -> TrajectoryEntry:
-        """Build a TrajectoryEntry for audit logging (ADR-8)."""
-        import hashlib
+        """Build a TrajectoryEntry for audit logging (ADR-8).
+
+        Computes real sha256 hashes of input/output data when provided.
+        Falls back to '0' * 64 placeholder when data is not available
+        (e.g. for interrupt-based tools like ask_candidate).
+
+        Args:
+            node: The node name (e.g. "candidate_agent").
+            tool_used: The tool name, or None for fixed-node entries.
+            latency_ms: Execution latency in milliseconds.
+            model: The model identifier string.
+            status: Execution status ("success", "retried", "failed_closed", "escalated").
+            input_data: The input payload to hash (optional).
+            output_data: The output payload to hash (optional).
+
+        Returns:
+            A fully populated TrajectoryEntry.
+        """
+        from scoutai.audit.log import compute_sha256
         now = datetime.now(timezone.utc).isoformat()
+
+        input_hash = compute_sha256(input_data) if input_data is not None else "0" * 64
+        output_hash = compute_sha256(output_data) if output_data is not None else "0" * 64
+
         return TrajectoryEntry(
             node=node,
             tool_used=tool_used,
             timestamp=now,
-            input_hash="0" * 64,   # placeholder — full hashing in S12 audit infrastructure
-            output_hash="0" * 64,  # placeholder
+            input_hash=input_hash,
+            output_hash=output_hash,
             latency_ms=max(0, latency_ms),
             model=model,
             model_role="fast_structured",

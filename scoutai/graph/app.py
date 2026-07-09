@@ -40,11 +40,12 @@ ADR references: ADR-4 (deterministic outer graph), ADR-9 (agent in one node).
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, TypedDict
+from typing import Any, Callable, Optional, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from scoutai.audit.log import AuditLogger, build_audit_hook
 from scoutai.capabilities.model_router import ModelRouter
 from scoutai.capabilities.role_requirements import SessionCache
 from scoutai.config import ScoutAIConfig
