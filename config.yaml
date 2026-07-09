@@ -1,0 +1,168 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ScoutAI Configuration
+# Version: 1.0.0
+# All secrets (API keys) are loaded from environment variables — never put
+# secret values in this file. See .env.example for required variables.
+# ─────────────────────────────────────────────────────────────────────────────
+
+schema_version: "1.0.0"
+
+# ── Model Roles (§6) ──────────────────────────────────────────────────────────
+# The architecture defines two roles; do NOT put specific model versions in
+# business logic — resolve via this config only.
+model_roles:
+  fast_structured:
+    # Used by: screen_resume, extract_evidence, assess_capabilities,
+    #          verify_evidence, generate_interview_questions,
+    #          reevaluate_candidate, run_fairness_probe.
+    # Runs 6-8x per candidate; latency and JSON reliability matter most.
+    primary: "gemini/gemini-2.0-flash"          # configurable — change as needed
+    fallback: "groq/llama-3.3-70b-versatile"    # if primary rate-limited
+    fallback_2: "groq/qwen-qwq-32b"             # last resort
+    provider_env_vars:
+      gemini: "GOOGLE_API_KEY"
+      groq: "GROQ_API_KEY"
+
+  high_context:
+    # Used by: extract_role_requirements, generate_rubric,
+    #          compose_decision_summary.
+    # Runs 1-3x per session; context window depth matters more than speed.
+    primary: "gemini/gemini-2.0-flash"          # configurable
+    fallback: "groq/llama-3.3-70b-versatile"
+    provider_env_vars:
+      gemini: "GOOGLE_API_KEY"
+      groq: "GROQ_API_KEY"
+
+# ── Retry / Circuit-Breaker Policy (§6) ──────────────────────────────────────
+retry:
+  max_attempts: 3
+  backoff_ms: [250, 500, 1000]          # per attempt, milliseconds
+  timeout_seconds: 30                   # per model call
+
+circuit_breaker:
+  consecutive_failures_threshold: 5    # failures before tripping
+  open_window_seconds: 60              # how long to stay open
+
+# ── Agent Guardrails (§3.3) ───────────────────────────────────────────────────
+agent:
+  max_iterations: 8                    # hard tool-call budget per candidate pass
+  force_finalize_recommendation: "hold"  # recommendation used on budget exhaustion
+
+# ── Graph Limits (§3.3) ───────────────────────────────────────────────────────
+graph:
+  recursion_limit: 40
+  interview_rounds_cap: 1              # Literal[0,1] enforced in schema and harness
+
+# ── Rubric Weights ────────────────────────────────────────────────────────────
+# Per §12 Open Items: weighted sum with per-criterion floor.
+# Any criterion at 'unknown' confidence caps weighted_score.
+rubric:
+  # Schema_version used for cache keying (§9)
+  config_version: "1.0.0"
+  # Weights by criterion category. Must sum to 1.0.
+  # These are defaults; a JD-specific rubric can override per-criterion weights.
+  default_weights:
+    required_skills: 0.40
+    experience: 0.30
+    education: 0.15
+    soft_skills: 0.15
+  # Score floor when confidence == 'unknown' for a criterion
+  unknown_confidence_score_floor: 0.0
+  # Maximum weighted_score when any criterion is 'unknown'
+  unknown_confidence_score_cap: 70.0
+
+# ── Security / Sanitization (§7) ─────────────────────────────────────────────
+security:
+  # Sensitive attributes stripped during screen_resume (§7.6, Principle #9)
+  # Configurable list — not hardcoded in business logic.
+  sensitive_attribute_patterns:
+    - "\\b(mr|mrs|ms|dr|prof)\\.?\\s+[A-Z][a-z]+"          # title + name
+    - "\\b[A-Z][a-z]+\\s+[A-Z][a-z]+\\b"                   # full name pattern
+    - "\\b\\d{1,2}/\\d{1,2}/\\d{2,4}\\b"                   # dates of birth
+    - "\\b(born|dob|date of birth)\\b"
+    - "\\b(age|aged)\\s*:\\s*\\d+"
+    - "\\b(male|female|non-binary|gender)\\b"
+    - "\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b"                 # phone numbers
+    - "\\b[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}\\b"  # email
+    - "\\b\\d+\\s+[A-Z][a-z]+\\s+(St|Ave|Blvd|Rd|Lane|Dr)\\b"       # address
+    - "(?i)(linkedin\\.com/in/)[\\w-]+"                     # linkedin handle
+    - "(?i)(github\\.com/)[\\w-]+"                          # github handle
+    - "\\b(photo|picture|photograph)\\b"
+
+  # Deterministic injection patterns (§7.1) — model verdict + these patterns
+  injection_patterns:
+    - "(?i)ignore (previous|all|the above|prior) (instructions?|prompts?|context)"
+    - "(?i)you are now"
+    - "(?i)new (persona|role|character|identity)"
+    - "(?i)(system prompt|system message|sys prompt)"
+    - "(?i)(jailbreak|dan mode|developer mode)"
+    - "(?i)disregard (your|all|any) (previous|prior|original) (instructions?|training)"
+    - "(?i)(act as|pretend to be|roleplay as) (an? )?(ai|gpt|llm|language model)"
+    - "<(system|assistant|human|user)>"
+    - "\\[INST\\]|\\[/INST\\]|<\\|im_start\\|>|<\\|im_end\\|>"
+
+  # Max file sizes before truncation (§7.2)
+  max_jd_chars: 10000
+  max_resume_chars: 15000
+
+  # Secret patterns to redact from audit logs (§7.5)
+  secret_redaction_patterns:
+    - "(?i)(api[_-]?key|apikey)\\s*[=:\"']\\s*[\\w\\-]+"
+    - "(?i)(secret|token|password|passwd|pwd)\\s*[=:\"']\\s*[\\S]+"
+    - "AIza[0-9A-Za-z\\-_]{35}"      # Google API key pattern
+    - "gsk_[0-9A-Za-z]{50,}"         # Groq API key pattern
+
+# ── Caching (§9) ──────────────────────────────────────────────────────────────
+cache:
+  enabled: true
+  ttl_seconds: 86400          # 24 hours — role_profile and rubric caches
+  backend: "memory"           # "memory" for demo; "redis" as upgrade path
+
+# ── Scheduling (§10 S10) ─────────────────────────────────────────────────────
+scheduling:
+  backend: "mock"             # "mock" for demo; "google_calendar" when credentials available
+  calendar_env_var: "GOOGLE_CALENDAR_CREDENTIALS_JSON"
+
+# ── Audit Log (§12 Open Items) ────────────────────────────────────────────────
+audit:
+  backend: "jsonl"            # "jsonl" default; "sqlite" as documented upgrade path
+  output_dir: "audit_logs"
+  filename_template: "run_{run_id}.jsonl"
+
+# ── Operational Logging (§10) ─────────────────────────────────────────────────
+logging:
+  level: "INFO"               # DEBUG / INFO / WARNING / ERROR
+  format: "json"              # "json" for structured; "text" for dev convenience
+  include_node_timings: true
+  include_model_usage: true
+
+# ── Prompt Versioning ─────────────────────────────────────────────────────────
+# Increment these when prompts change to invalidate cached outputs (§9, §10)
+prompt_versions:
+  extract_role_requirements: "1.0.0"
+  generate_rubric: "1.0.0"
+  screen_resume: "1.0.0"
+  extract_evidence: "1.0.0"
+  assess_capabilities: "1.0.0"
+  verify_evidence: "1.0.0"
+  generate_interview_questions: "1.0.0"
+  reevaluate_candidate: "1.0.0"
+  run_fairness_probe: "1.0.0"
+  compose_decision_summary: "1.0.0"
+
+# ── Tool Versioning ───────────────────────────────────────────────────────────
+tool_versions:
+  extract_role_requirements: "1.0.0"
+  generate_rubric: "1.0.0"
+  screen_resume: "1.0.0"
+  extract_evidence: "1.0.0"
+  assess_capabilities: "1.0.0"
+  verify_evidence: "1.0.0"
+  generate_interview_questions: "1.0.0"
+  ask_candidate: "1.0.0"
+  reevaluate_candidate: "1.0.0"
+  finalize_candidate: "1.0.0"
+  run_fairness_probe: "1.0.0"
+  compose_decision_summary: "1.0.0"
+  check_availability: "1.0.0"
+  propose_interview: "1.0.0"

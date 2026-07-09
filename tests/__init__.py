@@ -1,0 +1,1 @@
+"""ScoutAI test suite."""
