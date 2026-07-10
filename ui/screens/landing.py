@@ -6,9 +6,55 @@ Three inputs, vertically stacked, generously spaced. One primary action.
 
 from __future__ import annotations
 
+import threading
+from pathlib import Path
+
 import streamlit as st
 
+from scoutai.config import load_config
+from scoutai.runtime.session import start_run
 from ui.components import masthead
+
+
+def _run_pipeline(thread_id: str, jd_text: str, resume_texts: list[str]) -> None:
+    """Run the pipeline in a background thread and store results."""
+    from scoutai.runtime.session import _ensure_initialized, _graph, _config
+
+    _ensure_initialized()
+
+    # Build initial state
+    from scoutai.schemas import CandidateState
+    candidates = []
+    for i, text in enumerate(resume_texts):
+        candidates.append(
+            CandidateState(
+                candidate_id=f"c{i+1:03d}",
+                resume_text=text,
+                sanitized_resume=text,
+                injection_flag=False,
+                leakage_flag=False,
+                finalized=False,
+            )
+        )
+
+    initial_state = {
+        "jd": jd_text,
+        "candidates": candidates,
+        "current_idx": 0,
+        "shortlist": [],
+        "trajectory": [],
+        "step_count": 0,
+        "run_id": thread_id,
+        "role_profile": None,
+        "rubric": None,
+    }
+
+    from scoutai.graph.app import run_graph
+    result = run_graph(_graph, initial_state, _config, thread_id=thread_id)
+
+    # Store results in session state
+    st.session_state["pipeline_result"] = result
+    st.session_state["pipeline_done"] = True
 
 
 def render() -> None:
@@ -63,7 +109,27 @@ def render() -> None:
             st.session_state["run_name"] = run_name or "Untitled Run"
             st.session_state["jd"] = jd
             st.session_state["resumes"] = resumes
+            st.session_state["pipeline_done"] = False
+            st.session_state["pipeline_result"] = None
             st.session_state["screen"] = "processing"
+
+            # Read resume texts
+            resume_texts = []
+            for f in resumes:
+                text = f.read().decode("utf-8", errors="replace")
+                resume_texts.append(text)
+
+            # Start pipeline in background thread
+            thread_id = f"ui_run_{hash(jd) & 0xFFFFFFFF:08x}"
+            st.session_state["thread_id"] = thread_id
+            thread = threading.Thread(
+                target=_run_pipeline,
+                args=(thread_id, jd, resume_texts),
+                daemon=True,
+            )
+            thread.start()
+            st.session_state["pipeline_thread"] = thread
+
             st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
