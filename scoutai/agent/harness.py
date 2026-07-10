@@ -68,6 +68,122 @@ from scoutai.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# ── Exception classification ──────────────────────────────────────────────────
+
+# TPM threshold: if retry-after is <= this many seconds we treat it as a
+# per-minute token limit (short wait, bounded retry is worthwhile).
+# Above this threshold we treat it as a daily quota (TPD) — don't block,
+# trip the circuit breaker and fail-close immediately.
+_TPM_RETRY_AFTER_THRESHOLD_S = 120  # 2 minutes
+
+
+class _RateLimitKind:
+    """Classification result from classify_llm_exception."""
+    __slots__ = ("is_rate_limit", "is_tpd", "retry_after_s", "provider", "detail")
+
+    def __init__(
+        self,
+        *,
+        is_rate_limit: bool = False,
+        is_tpd: bool = False,
+        retry_after_s: float = 0.0,
+        provider: str = "",
+        detail: str = "",
+    ) -> None:
+        self.is_rate_limit = is_rate_limit
+        self.is_tpd = is_tpd          # True = daily quota (long wait), False = TPM (short wait)
+        self.retry_after_s = retry_after_s
+        self.provider = provider
+        self.detail = detail
+
+
+def classify_llm_exception(exc: Exception) -> _RateLimitKind:
+    """
+    Classify an exception from a bound LLM invoke() call.
+
+    Detects:
+    - Groq:   groq.RateLimitError  (HTTP 429)
+    - Gemini: google.api_core.exceptions.ResourceExhausted (HTTP 429 / gRPC RESOURCE_EXHAUSTED)
+
+    Distinguishes TPM (tokens-per-minute, retry-after <= 2 min) from TPD
+    (tokens-per-day, retry-after > 2 min).
+
+    Returns a _RateLimitKind with is_rate_limit=False for non-quota exceptions.
+    """
+    exc_type = type(exc).__name__
+    exc_str = str(exc)
+
+    # ── Groq ──────────────────────────────────────────────────────────────────
+    # groq.RateLimitError is raised directly by langchain-groq on HTTP 429.
+    try:
+        import groq
+        if isinstance(exc, groq.RateLimitError):
+            return _parse_rate_limit("groq", exc_str)
+    except ImportError:
+        pass
+
+    # ── Gemini / Google ───────────────────────────────────────────────────────
+    # google.api_core.exceptions.ResourceExhausted wraps gRPC RESOURCE_EXHAUSTED.
+    # langchain-google-genai re-raises it as-is.
+    try:
+        from google.api_core.exceptions import ResourceExhausted
+        if isinstance(exc, ResourceExhausted):
+            return _parse_rate_limit("gemini", exc_str)
+    except ImportError:
+        pass
+
+    # ── Fallback: string-match for when the exception is wrapped ──────────────
+    # LangChain sometimes wraps provider errors; check message text as a safety net.
+    lower = exc_str.lower()
+    if "rate limit" in lower or "ratelimit" in lower or "resource_exhausted" in lower or (
+        "429" in exc_str and ("token" in lower or "quota" in lower)
+    ):
+        provider = "gemini" if "generativelanguage" in lower or "gemini" in lower else "groq"
+        return _parse_rate_limit(provider, exc_str)
+
+    return _RateLimitKind()
+
+
+def _parse_rate_limit(provider: str, exc_str: str) -> _RateLimitKind:
+    """
+    Parse retry-after seconds out of the exception message and classify
+    the limit as TPM (short) or TPD (long / daily quota).
+
+    Groq messages contain e.g. "Please try again in 9m31.104s" or "in 205ms".
+    Gemini messages contain "retry_delay { seconds: 17 }".
+    """
+    import re
+
+    retry_after_s = 0.0
+
+    # Groq: "Please try again in 9m31.104s" / "in 30s" / "in 205ms"
+    m = re.search(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)(s|ms)", exc_str)
+    if m:
+        minutes = float(m.group(1) or 0)
+        amount  = float(m.group(2))
+        unit    = m.group(3)
+        retry_after_s = minutes * 60 + (amount / 1000 if unit == "ms" else amount)
+
+    # Gemini: "retry_delay { seconds: 17 }"
+    if retry_after_s == 0.0:
+        m2 = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", exc_str)
+        if m2:
+            retry_after_s = float(m2.group(1))
+
+    # Determine TPM vs TPD
+    is_tpd = retry_after_s > _TPM_RETRY_AFTER_THRESHOLD_S
+
+    # Truncate detail to avoid storing huge stack traces
+    detail = f"{provider} 429: {exc_str[:300]}"
+
+    return _RateLimitKind(
+        is_rate_limit=True,
+        is_tpd=is_tpd,
+        retry_after_s=retry_after_s,
+        provider=provider,
+        detail=detail,
+    )
+
 # ── Agent system prompt ───────────────────────────────────────────────────────
 
 AGENT_SYSTEM_PROMPT = """You are a hiring evaluation agent. Your job is to assess a candidate against a job rubric and produce a final recommendation.
@@ -165,6 +281,9 @@ class AgentHarness:
         ]
 
         for iteration in range(self._max_iterations):
+            _iter_start = time.monotonic()
+            _last_iter_elapsed_ms = 0  # track for budget-exhausted fallback
+
             # Remove ask_candidate after it's been used (ADR-3)
             if updated_candidate.interview_rounds >= 1:
                 available_tools.discard("ask_candidate")
@@ -189,11 +308,59 @@ class AgentHarness:
                 )
                 response = bound_model.invoke(messages)
             except Exception as e:
+                llm_call_elapsed_ms = int((time.monotonic() - _iter_start) * 1000)
+                kind = classify_llm_exception(e)
+                error_detail = (
+                    f"{type(e).__name__}: {str(e)[:300]} (iteration={iteration + 1})"
+                )
+
+                if kind.is_rate_limit and not kind.is_tpd:
+                    # ── TPM (per-minute): short retry-after, worth waiting ──────
+                    wait_s = kind.retry_after_s if kind.retry_after_s > 0 else 5.0
+                    logger.warning(
+                        "Agent LLM call hit TPM rate limit — retrying after backoff",
+                        extra={
+                            "iteration": iteration + 1,
+                            "retry_after_s": wait_s,
+                            "provider": kind.provider,
+                        },
+                    )
+                    time.sleep(wait_s)
+                    continue  # retry this iteration
+
+                if kind.is_rate_limit and kind.is_tpd:
+                    # ── TPD (daily quota): don't block, trip CB and fail-close ──
+                    logger.error(
+                        "Agent LLM call hit TPD quota — tripping circuit breaker",
+                        extra={
+                            "provider": kind.provider,
+                            "retry_after_s": kind.retry_after_s,
+                            "candidate_id": candidate.candidate_id,
+                        },
+                    )
+                    self._router.circuit_breaker.record_failure(kind.provider)
+                    return self._force_finalize(
+                        updated_candidate, rubric, trajectory, capabilities,
+                        elapsed_ms=llm_call_elapsed_ms,
+                        error_detail=error_detail,
+                        status="failed_closed_quota_exhausted",
+                    )
+
+                # ── Non-quota exception ────────────────────────────────────────
                 logger.error(
                     "Agent LLM call failed",
-                    extra={"iteration": iteration + 1, "error": str(e)},
+                    extra={
+                        "iteration": iteration + 1,
+                        "error": str(e),
+                        "exc_type": type(e).__name__,
+                    },
                 )
-                break
+                return self._force_finalize(
+                    updated_candidate, rubric, trajectory, capabilities,
+                    elapsed_ms=llm_call_elapsed_ms,
+                    error_detail=error_detail,
+                    status="failed_closed",
+                )
 
             messages.append(response)
 
@@ -201,12 +368,23 @@ class AgentHarness:
             tool_calls = getattr(response, "tool_calls", []) or []
 
             if not tool_calls:
-                # LLM didn't call any tool — treat as intent to finish but without finalize
+                # LLM returned a response but called no tools and didn't call
+                # finalize_candidate — treat as a failed iteration.
+                elapsed_ms = int((time.monotonic() - _iter_start) * 1000)
+                error_detail = (
+                    f"NoToolCalls: LLM returned no tool calls without calling "
+                    f"finalize_candidate (iteration={iteration + 1})"
+                )
                 logger.warning(
                     "Agent returned no tool calls without calling finalize_candidate",
-                    extra={"iteration": iteration + 1},
+                    extra={"iteration": iteration + 1, "elapsed_ms": elapsed_ms},
                 )
-                break
+                return self._force_finalize(
+                    updated_candidate, rubric, trajectory, capabilities,
+                    elapsed_ms=elapsed_ms,
+                    error_detail=error_detail,
+                    status="failed_closed",
+                )
 
             # Execute each tool call
             for tool_call in tool_calls:
@@ -300,6 +478,9 @@ class AgentHarness:
                     tool_call_id=tool_call_id,
                 ))
 
+                # Track elapsed time for budget-exhausted fallback
+                _last_iter_elapsed_ms = int((time.monotonic() - _iter_start) * 1000)
+
                 # If finalize was called, we're done
                 if tool_name == "finalize_candidate":
                     logger.info(
@@ -320,7 +501,15 @@ class AgentHarness:
                 "iterations_used": self._max_iterations,
             },
         )
-        return self._force_finalize(updated_candidate, rubric, trajectory, capabilities)
+        return self._force_finalize(
+            updated_candidate, rubric, trajectory, capabilities,
+            elapsed_ms=_last_iter_elapsed_ms,
+            error_detail=(
+                f"BudgetExhausted: {self._max_iterations} tool calls used without "
+                f"finalize_candidate (candidate={candidate.candidate_id})"
+            ),
+            status="failed_closed",
+        )
 
     def _force_finalize(
         self,
@@ -328,12 +517,22 @@ class AgentHarness:
         rubric: Rubric,
         trajectory: list[TrajectoryEntry],
         capabilities: Optional[CapabilityHypotheses],
+        *,
+        elapsed_ms: int = 0,
+        error_detail: Optional[str] = None,
+        status: str = "failed_closed",
     ) -> tuple[CandidateState, ShortlistEntry, list[TrajectoryEntry]]:
         """
-        Force-finalize a candidate when budget is exhausted without finalize_candidate.
+        Force-finalize a candidate when the loop exits without finalize_candidate.
 
         Per §3.3: recommendation='hold', remaining_uncertainties populated from
         last known state. This is a fail-closed path — never silent.
+
+        Args:
+            elapsed_ms:   Real wall-clock time of the failing operation in ms.
+            error_detail: Human-readable cause: '<ExcType>: <msg> (iteration=N)'.
+            status:       Trajectory status — 'failed_closed' for generic failures,
+                          'failed_closed_quota_exhausted' for TPD quota hits.
         """
         remaining = [
             name for name, cap in (capabilities.assessments if capabilities else {}).items()
@@ -348,6 +547,8 @@ class AgentHarness:
             f"Insufficient evidence gathered to make a confident recommendation. "
             f"Force-finalized with '{force_rec}'."
         )
+        if error_detail:
+            rationale = f"{rationale} Cause: {error_detail}"
 
         try:
             entry = finalize_candidate(
@@ -370,13 +571,14 @@ class AgentHarness:
                 evidence_refs=[],
             )
 
-        # Record force-finalize in trajectory
+        # Record force-finalize in trajectory with real latency and error detail
         traj = self._make_trajectory_entry(
             node="candidate_agent",
             tool_used="force_finalize",
-            latency_ms=0,
+            latency_ms=elapsed_ms,
             model=None,
-            status="failed_closed",
+            status=status,
+            error_detail=error_detail,
         )
         trajectory.append(traj)
 
@@ -408,6 +610,7 @@ class AgentHarness:
         """
         start_time = time.monotonic()
         status = "success"
+        error_detail: Optional[str] = None
         result: Any = None
 
         try:
@@ -476,6 +679,7 @@ class AgentHarness:
                     remaining_uncertainties=remaining if remaining else None,
                 )
         except Exception as e:
+            error_detail = f"{type(e).__name__}: {str(e)[:300]}"
             logger.error(
                 "Tool execution failed",
                 extra={"tool": tool_name, "error": str(e)},
@@ -490,6 +694,7 @@ class AgentHarness:
             latency_ms=latency_ms,
             model=None,  # model tracked by router; not repeated here to avoid duplication
             status=status,
+            error_detail=error_detail if status != "success" else None,
         )
         return result, traj
 
@@ -503,6 +708,7 @@ class AgentHarness:
         *,
         input_data: Any = None,
         output_data: Any = None,
+        error_detail: Optional[str] = None,
     ) -> TrajectoryEntry:
         """Build a TrajectoryEntry for audit logging (ADR-8).
 
@@ -515,9 +721,11 @@ class AgentHarness:
             tool_used: The tool name, or None for fixed-node entries.
             latency_ms: Execution latency in milliseconds.
             model: The model identifier string.
-            status: Execution status ("success", "retried", "failed_closed", "escalated").
+            status: Execution status ("success", "retried", "failed_closed",
+                    "failed_closed_quota_exhausted", "escalated").
             input_data: The input payload to hash (optional).
             output_data: The output payload to hash (optional).
+            error_detail: Human-readable error cause for non-success entries.
 
         Returns:
             A fully populated TrajectoryEntry.
@@ -541,6 +749,7 @@ class AgentHarness:
             tool_version=self._config.tool_versions.get(tool_used or "extract_evidence", "1.0.0"),
             schema_version=self._schema_version,
             status=status,  # type: ignore[arg-type]
+            error_detail=error_detail,
         )
 
     def _build_task_message(
@@ -578,49 +787,49 @@ class AgentHarness:
         tools = []
 
         if "extract_evidence" in available_tools:
-            @lc_tool
+            @lc_tool("extract_evidence")
             def extract_evidence_tool() -> str:
                 """Extract evidence from the candidate's résumé relevant to the role requirements."""
                 return "call extract_evidence"
             tools.append(extract_evidence_tool)
 
         if "assess_capabilities" in available_tools:
-            @lc_tool
+            @lc_tool("assess_capabilities")
             def assess_capabilities_tool() -> str:
                 """Assess the candidate's capabilities against the rubric using extracted evidence."""
                 return "call assess_capabilities"
             tools.append(assess_capabilities_tool)
 
         if "verify_evidence" in available_tools:
-            @lc_tool
+            @lc_tool("verify_evidence")
             def verify_evidence_tool() -> str:
                 """Verify whether the evidence is sufficient to make a recommendation."""
                 return "call verify_evidence"
             tools.append(verify_evidence_tool)
 
         if "generate_interview_questions" in available_tools:
-            @lc_tool
+            @lc_tool("generate_interview_questions")
             def generate_interview_questions_tool() -> str:
                 """Generate interview questions to address evidence gaps. Call at most once."""
                 return "call generate_interview_questions"
             tools.append(generate_interview_questions_tool)
 
         if "ask_candidate" in available_tools:
-            @lc_tool
+            @lc_tool("ask_candidate")
             def ask_candidate_tool(question: str, target_criterion: str, rationale: str, priority_score: float = 1.0) -> str:
                 """Ask the candidate one clarifying question. This tool can only be used once."""
                 return f"interrupt: ask_candidate about {target_criterion}"
             tools.append(ask_candidate_tool)
 
         if "reevaluate_candidate" in available_tools:
-            @lc_tool
+            @lc_tool("reevaluate_candidate")
             def reevaluate_candidate_tool(question: str, answer: str) -> str:
                 """Update the candidate's scores based on their interview answer."""
                 return "call reevaluate_candidate"
             tools.append(reevaluate_candidate_tool)
 
         if "finalize_candidate" in available_tools:
-            @lc_tool
+            @lc_tool("finalize_candidate")
             def finalize_candidate_tool(
                 recommendation: str,
                 rationale: str,
