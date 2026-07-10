@@ -1,0 +1,1 @@
+"""ScoutAI Streamlit UI — monochrome, editorial-grid, keyboard-first hiring review tool."""
