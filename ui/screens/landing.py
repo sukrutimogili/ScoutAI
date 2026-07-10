@@ -10,6 +10,7 @@ import threading
 from pathlib import Path
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 from scoutai.config import load_config
 from scoutai.runtime.session import start_run
@@ -52,9 +53,26 @@ def _run_pipeline(thread_id: str, jd_text: str, resume_texts: list[str]) -> None
     from scoutai.graph.app import run_graph
     result = run_graph(_session._graph, initial_state, _session._config, thread_id=thread_id)
 
+    # Check if the run paused at an interrupt (e.g. human_review)
+    run_config = {
+        "configurable": {"thread_id": thread_id},
+    }
+    state_snapshot = _session._graph.get_state(run_config)
+    pending_nodes = list(state_snapshot.next) if state_snapshot.next else []
+
+    if pending_nodes:
+        # Run is paused at an interrupt — not finished
+        st.session_state["pipeline_paused"] = True
+        st.session_state["pipeline_pending_nodes"] = pending_nodes
+        st.session_state["pipeline_done"] = False
+    else:
+        # Run completed normally
+        st.session_state["pipeline_paused"] = False
+        st.session_state["pipeline_pending_nodes"] = []
+        st.session_state["pipeline_done"] = True
+
     # Store results in session state
     st.session_state["pipeline_result"] = result
-    st.session_state["pipeline_done"] = True
 
 
 def render() -> None:
@@ -122,11 +140,14 @@ def render() -> None:
             # Start pipeline in background thread
             thread_id = f"ui_run_{hash(jd) & 0xFFFFFFFF:08x}"
             st.session_state["thread_id"] = thread_id
+            st.session_state["pipeline_paused"] = False
+            st.session_state["pipeline_pending_nodes"] = []
             thread = threading.Thread(
                 target=_run_pipeline,
                 args=(thread_id, jd, resume_texts),
                 daemon=True,
             )
+            add_script_run_ctx(thread, get_script_run_ctx())
             thread.start()
             st.session_state["pipeline_thread"] = thread
 
