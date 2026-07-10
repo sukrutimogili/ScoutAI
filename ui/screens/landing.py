@@ -18,9 +18,9 @@ from ui.components import masthead
 
 def _run_pipeline(thread_id: str, jd_text: str, resume_texts: list[str]) -> None:
     """Run the pipeline in a background thread and store results."""
-    from scoutai.runtime.session import _ensure_initialized, _graph, _config
+    from scoutai.runtime import session as _session
 
-    _ensure_initialized()
+    _session._ensure_initialized()
 
     # Build initial state
     from scoutai.schemas import CandidateState
@@ -50,7 +50,7 @@ def _run_pipeline(thread_id: str, jd_text: str, resume_texts: list[str]) -> None
     }
 
     from scoutai.graph.app import run_graph
-    result = run_graph(_graph, initial_state, _config, thread_id=thread_id)
+    result = run_graph(_session._graph, initial_state, _session._config, thread_id=thread_id)
 
     # Store results in session state
     st.session_state["pipeline_result"] = result
