@@ -1,0 +1,1 @@
+"""Runtime session management for ScoutAI pipeline execution."""
