@@ -468,6 +468,8 @@ class AgentHarness:
                             "rationale": str(tool_args.get("rationale", "")),
                             "finalized": True,
                             "remaining_uncertainties": tool_result.remaining_uncertainties,
+                            # Copy strengths so candidate_list/candidate_review can render them
+                            "strengths": tool_result.strengths,
                         }
                     )
 
@@ -588,6 +590,7 @@ class AgentHarness:
                 "rationale": rationale,
                 "finalized": True,
                 "remaining_uncertainties": remaining,
+                "strengths": entry.strengths,
             }
         )
         return updated, entry, trajectory

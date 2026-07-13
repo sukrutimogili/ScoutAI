@@ -13,6 +13,15 @@ from ui.components import masthead, progress_bar, alert_warn
 from ui.mock_data import MOCK_CANDIDATES
 
 
+def _get_candidates() -> list[dict]:
+    """Return candidates from real pipeline_data, falling back to mock data."""
+    data = st.session_state.get("pipeline_data", {})
+    candidates_raw = data.get("candidates", [])
+    if candidates_raw:
+        return [c if isinstance(c, dict) else c.model_dump() for c in candidates_raw]
+    return list(MOCK_CANDIDATES)
+
+
 def render() -> None:
     """Render the continue reviewing screen."""
     run_name = st.session_state.get("run_name", "Hiring Run")
@@ -40,8 +49,8 @@ def render() -> None:
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # Review progress
-    candidates = MOCK_CANDIDATES
+    # Review progress — use real candidate list for an accurate total
+    candidates = _get_candidates()
     total = len(candidates)
     reviewed = st.session_state.get("reviewed_count", 0)
     reviewed += 1
@@ -55,9 +64,9 @@ def render() -> None:
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # Find next un-reviewed candidate (for demo, just pick the next one)
+    # Find next un-reviewed candidate (sequential by current list order)
     current_idx = next(
-        (i for i, c in enumerate(candidates) if c["candidate_id"] == candidate_id),
+        (i for i, c in enumerate(candidates) if c.get("candidate_id") == candidate_id),
         0,
     )
     next_idx = current_idx + 1

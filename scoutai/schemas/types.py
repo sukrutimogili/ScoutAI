@@ -141,6 +141,10 @@ class CandidateState(BaseModel):
         default_factory=list,
         description="Unresolved gaps at finalization time (populated on force-finalize too).",
     )
+    strengths: list[str] = Field(
+        default_factory=list,
+        description="High-confidence capability names — copied from ShortlistEntry on finalization.",
+    )
 
 
 # ── Shortlist entry (§5) ──────────────────────────────────────────────────────

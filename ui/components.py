@@ -33,12 +33,14 @@ def masthead(run_name: str | None = None) -> None:
     )
 
 
-def status_pill(recommendation: str) -> str:
+def status_pill(recommendation: str | None) -> str:
     """Return HTML for a recommendation status pill.
 
     The pill uses tint background only — text is always --ink.
     This keeps the page monochrome at a glance and legible for colorblind users.
     """
+    if not recommendation:
+        return '<span class="status-pill hold">Pending</span>'
     label = get_recommendation_label(recommendation)
     return f'<span class="status-pill {recommendation}">{label}</span>'
 
@@ -71,7 +73,7 @@ def progress_bar(current: int, total: int, label: str = "") -> str:
     return html
 
 
-def candidate_row(candidate_id: str, recommendation: str, summary: str, score: float | None = None) -> str:
+def candidate_row(candidate_id: str, recommendation: str | None, summary: str, score: float | None = None) -> str:
     """Return HTML for a candidate list row.
 
     This is a row, not a card — hairline divider between rows,
@@ -79,11 +81,13 @@ def candidate_row(candidate_id: str, recommendation: str, summary: str, score: f
     """
     score_html = ""
     if score is not None:
-        score_html = f'<span style="font-size:13px;color:var(--muted-2);margin-left:16px;">{score:.0%}</span>'
+        # Score is 0-100; display as integer with /100 suffix
+        score_html = f'<span style="font-size:13px;color:var(--muted-2);margin-left:16px;">{score:.0f}/100</span>'
+    pill = status_pill(recommendation)
     return f"""
     <div class="candidate-row" onclick="this.querySelector('a').click()">
         <span class="candidate-row-name">{candidate_id}</span>
-        {status_pill(recommendation)}
+        {pill}
         <span class="candidate-row-summary">{summary}</span>
         {score_html}
         <span class="candidate-row-chevron">›</span>

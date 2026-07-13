@@ -179,7 +179,7 @@ MOCK_SHORTLIST: list[dict[str, Any]] = [
     {
         "candidate": "c001",
         "recommendation": "strong_interview",
-        "weighted_score": 0.88,
+        "weighted_score": 88.0,  # 0-100 scale, matching ShortlistEntry schema
         "confidence_summary": {"high": 3, "medium": 1, "low": 0},
         "strengths": ["System design", "Python expertise", "AWS certification"],
         "remaining_uncertainties": [],
@@ -188,7 +188,7 @@ MOCK_SHORTLIST: list[dict[str, Any]] = [
     {
         "candidate": "c005",
         "recommendation": "strong_interview",
-        "weighted_score": 0.85,
+        "weighted_score": 85.0,  # 0-100 scale, matching ShortlistEntry schema
         "confidence_summary": {"high": 3, "medium": 1, "low": 0},
         "strengths": ["System design", "Python", "AWS certification", "Leadership"],
         "remaining_uncertainties": [],
@@ -197,7 +197,7 @@ MOCK_SHORTLIST: list[dict[str, Any]] = [
     {
         "candidate": "c002",
         "recommendation": "interview",
-        "weighted_score": 0.68,
+        "weighted_score": 68.0,  # 0-100 scale, matching ShortlistEntry schema
         "confidence_summary": {"high": 1, "medium": 1, "low": 2},
         "strengths": ["Python proficiency", "API design"],
         "remaining_uncertainties": ["aws_depth", "leadership_scope"],
@@ -206,7 +206,7 @@ MOCK_SHORTLIST: list[dict[str, Any]] = [
     {
         "candidate": "c004",
         "recommendation": "interview",
-        "weighted_score": 0.72,
+        "weighted_score": 72.0,  # 0-100 scale, matching ShortlistEntry schema
         "confidence_summary": {"high": 1, "medium": 3, "low": 0},
         "strengths": ["Python", "System design", "AWS certified"],
         "remaining_uncertainties": ["leadership_scale"],

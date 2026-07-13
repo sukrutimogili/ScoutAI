@@ -12,6 +12,30 @@ from ui.components import masthead, status_pill, candidate_row
 from ui.mock_data import MOCK_CANDIDATES, MOCK_SHORTLIST
 
 
+def _get_candidates() -> list[dict]:
+    """Return candidates from real pipeline_data, falling back to mock data."""
+    data = st.session_state.get("pipeline_data", {})
+    candidates_raw = data.get("candidates", [])
+    if candidates_raw:
+        result = []
+        for c in candidates_raw:
+            result.append(c if isinstance(c, dict) else c.model_dump())
+        return result
+    return list(MOCK_CANDIDATES)
+
+
+def _get_shortlist() -> list[dict]:
+    """Return shortlist from real pipeline_data, falling back to mock data."""
+    data = st.session_state.get("pipeline_data", {})
+    shortlist_raw = data.get("shortlist", [])
+    if shortlist_raw:
+        result = []
+        for s in shortlist_raw:
+            result.append(s if isinstance(s, dict) else s.model_dump())
+        return result
+    return list(MOCK_SHORTLIST)
+
+
 def render() -> None:
     """Render the candidate list screen."""
     run_name = st.session_state.get("run_name", "Hiring Run")
@@ -50,46 +74,60 @@ def render() -> None:
         "Needs Review": "hold",
     }
 
-    # Build candidate list from mock data
-    candidates = list(MOCK_CANDIDATES)
+    # Build candidate list from pipeline_data (with mock fallback)
+    candidates = _get_candidates()
+    shortlist = _get_shortlist()
 
     # Apply filter
     if filter_rec != "All":
         rec_val = rec_map.get(filter_rec)
-        candidates = [c for c in candidates if c["recommendation"] == rec_val]
+        candidates = [c for c in candidates if c.get("recommendation") == rec_val]
 
     # Apply sort
     if sort_by == "Score":
         # Sort by average scorecard score descending
         def avg_score(c):
-            scores = list(c.get("scorecard", {}).values())
+            scorecard = c.get("scorecard", {})
+            scores = []
+            for v in scorecard.values():
+                # ScoreEntry may be a dict with a "score" key (real backend)
+                # or a raw int/float (mock data)
+                if isinstance(v, dict):
+                    scores.append(v.get("score", 0))
+                else:
+                    scores.append(float(v))
             return sum(scores) / len(scores) if scores else 0
 
         candidates.sort(key=avg_score, reverse=True)
     elif sort_by == "Name":
-        candidates.sort(key=lambda c: c["candidate_id"])
+        candidates.sort(key=lambda c: c.get("candidate_id", ""))
     else:
         # Recommendation — sort by priority
         priority = {"strong_interview": 0, "interview": 1, "hold": 2, "reject": 3}
-        candidates.sort(key=lambda c: priority.get(c["recommendation"], 99))
+        candidates.sort(key=lambda c: priority.get(c.get("recommendation", ""), 99))
 
     # Render candidate rows
     st.markdown('<div style="margin-top:16px;">', unsafe_allow_html=True)
     for c in candidates:
+        # Guard: skip candidates that have no recommendation yet (still processing)
+        recommendation = c.get("recommendation")
+        if not recommendation:
+            continue
+
         # Build a one-line summary from strengths
         strengths = c.get("strengths", [])
         summary = "; ".join(strengths[:2]) if strengths else "No strengths identified"
 
         # Get score from shortlist if available
         shortlist_entry = next(
-            (s for s in MOCK_SHORTLIST if s["candidate"] == c["candidate_id"]),
+            (s for s in shortlist if s.get("candidate") == c.get("candidate_id")),
             None,
         )
         score = shortlist_entry.get("weighted_score") if shortlist_entry else None
 
         # Render the row
         st.markdown(
-            candidate_row(c["candidate_id"], c["recommendation"], summary, score),
+            candidate_row(c["candidate_id"], recommendation, summary, score),
             unsafe_allow_html=True,
         )
 
