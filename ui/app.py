@@ -6,13 +6,10 @@ Flow order: Landing → Processing → Summary → Candidate List → Candidate 
            Candidate Comparison → Continue Reviewing → Hiring Run Complete
 """
 
-from __future__ import annotations
-
 import streamlit as st
-
 from ui.styles import inject_css
 
-# Must be the first Streamlit command
+# 1. Page Config Setup (Must always be first)
 st.set_page_config(
     page_title="ScoutAI",
     page_icon="⚡",
@@ -20,16 +17,17 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Inject design tokens and CSS
-st.markdown(f"<style>{inject_css()}</style>", unsafe_allow_html=True)
+# 2. Inject global custom workspace styles cleanly
+st.markdown(inject_css(), unsafe_allow_html=True)
+
+# 3. Mount the absolute static brand token to the window workspace boundary
+st.markdown('<div class="brand-logo">ScoutAI</div>', unsafe_allow_html=True)
 
 # ── Session state initialization ──────────────────────────────────────────────
-
 if "screen" not in st.session_state:
     st.session_state["screen"] = "landing"
 
 # ── Screen routing ────────────────────────────────────────────────────────────
-
 screen = st.session_state["screen"]
 
 if screen == "landing":

@@ -76,3 +76,6 @@ addopts = "-v --tb=short"
 [tool.coverage.run]
 source = ["scoutai"]
 omit = ["tests/*"]
+
+[theme]
+font="Open Sans"

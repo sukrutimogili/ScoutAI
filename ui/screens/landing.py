@@ -123,39 +123,58 @@ def _run_pipeline(
 
 
 def render() -> None:
-    """Render the landing screen."""
-    masthead()
+    """Render the landing screen with a premium two-column tech grid."""
+    # masthead()
 
-    st.markdown('<div class="content">', unsafe_allow_html=True)
-    st.markdown('<p class="eyebrow">NEW HIRING RUN</p>', unsafe_allow_html=True)
-    st.markdown("<h1>Start a hiring run</h1>", unsafe_allow_html=True)
-    st.markdown('<div style="margin-top:32px;">', unsafe_allow_html=True)
+    # 1. Open the primary column split engine (Matches our CSS rules perfectly)
+    col1, col2 = st.columns(2)
 
-    jd = st.text_area(
-        "Job description",
-        placeholder="Paste the job description here...",
-        height=200,
-        key="landing_jd",
-    )
+    with col1:
+        # Editorial visual block elements
+        st.markdown('<p class="eyebrow">NEW HIRING RUN</p>', unsafe_allow_html=True)
+        st.markdown("<h1>Start a<br>hiring run</h1>", unsafe_allow_html=True)
+        
+        # Grounding technical structural SVG illustration to balance empty white space
+        st.markdown(
+            """
+            <div style="margin-top: 64px; max-width: 340px;">
+                <svg width="100%" height="160" viewBox="0 0 320 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <line x1="0" y1="20" x2="320" y2="20" stroke="#0A0A0A" stroke-width="0.75" stroke-dasharray="4 4" opacity="0.2"/>
+                    <line x1="0" y1="140" x2="320" y2="140" stroke="#0A0A0A" stroke-width="0.75" stroke-dasharray="4 4" opacity="0.2"/>
+                    <rect x="20" y="45" width="70" height="70" stroke="#0A0A0A" stroke-width="1.25" fill="none"/>
+                    <circle cx="160" cy="80" r="35" stroke="#0A0A0A" stroke-width="1.25" fill="none"/>
+                    <path d="M240 80 L290 80 M265 55 L265 105" stroke="#0A0A0A" stroke-width="1.25"/>
+                    <text x="20" y="132" font-family="Space Mono, monospace" font-size="9" fill="#6B6B6B" letter-spacing="0.05em">SYS.EVAL // KEY_01</text>
+                </svg>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
 
-    resumes = st.file_uploader(
-        "Résumés",
-        accept_multiple_files=True,
-        type=["pdf", "docx", "txt"],
-        key="landing_resumes",
-        help="PDF, DOCX, or TXT",
-    )
-
-    run_name = st.text_input(
-        "Run name",
-        placeholder="Optional — defaults to the date and role title",
-        key="landing_run_name",
-    )
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
+        # 2. Interactive user inputs aligned to the clean right workspace column
+        jd = st.text_area(
+            "Job description",
+            placeholder="Paste the job description here...",
+            height=200,
+            key="landing_jd",
+        )
+
+        resumes = st.file_uploader(
+            "Résumés",
+            accept_multiple_files=True,
+            type=["pdf", "docx", "txt"],
+            key="landing_resumes",
+            help="PDF, DOCX, or TXT",
+        )
+
+        run_name = st.text_input(
+            "Run name",
+            placeholder="Optional — defaults to the date and role title",
+            key="landing_run_name",
+        )
+
+        # Action execution triggers perfectly wide beneath the forms
         disabled = not (jd.strip() and resumes)
         if st.button(
             "Start evaluation",
@@ -170,16 +189,17 @@ def render() -> None:
 
             thread_id = f"ui_run_{hash(jd) & 0xFFFFFFFF:08x}"
 
-            # Shared communication objects — safe to read/write across threads
+            # Shared communication objects
             result_bag: dict = {}
             done_event = threading.Event()
 
-            # Store in session_state so processing.py can poll them
+            # Store states for the processing module
             st.session_state["run_name"] = run_name or "Untitled Run"
             st.session_state["thread_id"] = thread_id
             st.session_state["_pipeline_result_bag"] = result_bag
             st.session_state["_pipeline_done_event"] = done_event
-            # Clear any stale state from a previous run
+            
+            # Clear historical caches cleanly
             for key in ("pipeline_data", "pipeline_error", "pipeline_error_detail",
                         "processing_step", "processing_started", "reviewed_count"):
                 st.session_state.pop(key, None)
@@ -194,5 +214,3 @@ def render() -> None:
 
             st.session_state["screen"] = "processing"
             st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)

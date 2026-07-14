@@ -32,479 +32,171 @@ TOKENS = {
 SPACING = {4, 8, 12, 16, 24, 32, 48, 64, 96}
 
 
+
 def inject_css() -> str:
-    """Return the full CSS <style> block to inject into the Streamlit app.
-
-    This is called once at the top of app.py via st.markdown(..., unsafe_allow_html=True).
-    It overrides Streamlit's default theme to match the ScoutAI design tokens.
-    """
+    """Return the premium, two-column tech-editorial UI layout overrides for ScoutAI."""
     return f"""
-    @import url('https://fonts.googleapis.com/css2?family=Open Sans:wght@400;700&display=swap');
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Space+Mono&display=swap');
 
-    * {{
-        font-family: '{TOKENS['--font-family']}' !important;
-    }}
-
+    /* ── Core Canvas Baseline & Faint Tech Blueprint Grid ──────────────── */
     html, body, .stApp {{
-        background-color: {TOKENS['--paper']};
-        color: {TOKENS['--ink']};
-        font-family: '{TOKENS['--font-family']}';
-        font-weight: 400;
-        font-size: 15px;
-        line-height: 1.6;
+        background-color: #F8F8F6 !important;
+        color: #0A0A0A !important;
+        font-family: 'Open Sans', -apple-system, sans-serif !important;
+        -webkit-font-smoothing: antialiased;
     }}
 
-    /* ── Masthead ─────────────────────────────────────────────────────────── */
-    .masthead {{
-        height: 56px;
-        border-bottom: 1px solid {TOKENS['--line']};
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 0 32px;
-        background: {TOKENS['--paper']};
-        position: sticky;
-        top: 0;
-        z-index: 100;
+    .stApp {{
+        background-image: 
+            linear-gradient(to right, rgba(0,0,0,0.015) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(0,0,0,0.015) 1px, transparent 1px) !important;
+        background-size: 32px 32px !important;
     }}
-    .masthead-wordmark {{
-        font-size: 15px;
+
+    /* ── Asymmetric Column Layout Engine ───────────────────────────────── */
+    [data-testid="stAppViewBlockContainer"], .block-container {{
+        max-width: 1200px !important;
+        margin: 0 auto !important;
+        padding: 80px 48px !important;
+    }}
+
+    /* Target the horizontal column block container */
+    [data-testid="stHorizontalBlock"] {{
+        display: flex !important;
+        flex-direction: row !important;
+        gap: 96px !important; 
+        align-items: flex-start !important;
+        margin-top: 48px !important;
+    }}
+
+    /* Balance both sides evenly */
+    [data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {{
+        width: 50% !important;
+        flex: 1 1 0% !important;
+    }}
+
+    /* Make left column text cleanly sticky */
+    [data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:first-child {{
+        position: sticky !important;
+        top: 140px !important;
+    }}
+
+    /* ── Absolute Branding Placement ─────────────────────────────────────── */
+    .brand-logo {{
+        position: absolute;
+        top: 40px;
+        left: 0px;
+        font-family: 'Space Mono', monospace;
+        font-size: 22px !important;
         font-weight: 700;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.15em;
         text-transform: uppercase;
-        line-height: 1;
-        color: {TOKENS['--ink']};
-    }}
-    .masthead-right {{
-        font-size: 13px;
-        color: {TOKENS['--muted']};
-    }}
-    .masthead-right a {{
-        color: {TOKENS['--muted']};
-        text-decoration: underline;
-        cursor: pointer;
-        margin-left: 16px;
-    }}
-    .masthead-right a:hover {{
-        color: {TOKENS['--ink']};
+        color: #0A0A0A;
     }}
 
-    /* ── Content container ────────────────────────────────────────────────── */
-    .content {{
-        max-width: {TOKENS['--max-width']};
-        margin: 0 auto;
-        padding: 48px 32px;
-    }}
-
-    /* ── Typography ───────────────────────────────────────────────────────── */
+    /* ── Typography Scale Correction ──────────────────────────────────────── */
     h1 {{
-        font-size: 28px;
-        font-weight: 700;
-        letter-spacing: -0.005em;
-        line-height: 1.2;
-        margin: 0 0 32px 0;
-        color: {TOKENS['--ink']};
-    }}
-    h2 {{
-        font-size: 18px;
-        font-weight: 700;
-        line-height: 1.3;
-        margin: 0 0 16px 0;
-        color: {TOKENS['--ink']};
-    }}
-    .eyebrow {{
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        line-height: 1;
-        color: {TOKENS['--muted']};
-        margin-bottom: 8px;
-    }}
-    .display-number {{
-        font-size: 64px;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        line-height: 1.05;
-        color: {TOKENS['--ink']};
-        margin: 0;
-    }}
-    .caption {{
-        font-size: 13px;
-        font-weight: 400;
-        line-height: 1.5;
-        color: {TOKENS['--muted']};
-    }}
-    .caption-2 {{
-        font-size: 13px;
-        font-weight: 400;
-        color: {TOKENS['--muted-2']};
-    }}
-
-    /* ── Status pills ─────────────────────────────────────────────────────── */
-    .status-pill {{
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 12px;
-        border-radius: {TOKENS['--radius']};
-        font-size: 13px;
-        font-weight: 700;
-        color: {TOKENS['--ink']};
-        line-height: 1.4;
-        white-space: nowrap;
-    }}
-    .status-pill.strong_interview {{ background: {TOKENS['--signal-good-bg']}; }}
-    .status-pill.interview {{ background: {TOKENS['--signal-neutral-bg']}; }}
-    .status-pill.reject {{ background: {TOKENS['--signal-bad-bg']}; }}
-    .status-pill.hold {{ background: {TOKENS['--signal-warn-bg']}; }}
-
-    /* ── Buttons ──────────────────────────────────────────────────────────── */
-    .btn-primary {{
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 8px 24px;
-        background: {TOKENS['--ink']};
-        color: {TOKENS['--paper']};
-        border: 1px solid {TOKENS['--ink']};
-        border-radius: {TOKENS['--radius']};
-        font-size: 15px;
-        font-weight: 700;
-        line-height: 1.4;
-        cursor: pointer;
-        transition: opacity 120ms ease-out;
-        text-decoration: none;
-    }}
-    .btn-primary:hover {{
-        opacity: 0.85;
-    }}
-    .btn-primary:disabled {{
-        background: {TOKENS['--muted-2']};
-        border-color: {TOKENS['--muted-2']};
-        cursor: not-allowed;
-        opacity: 1;
-    }}
-    .btn-secondary {{
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 8px 24px;
-        background: transparent;
-        color: {TOKENS['--ink']};
-        border: 1px solid {TOKENS['--line']};
-        border-radius: {TOKENS['--radius']};
-        font-size: 15px;
-        font-weight: 400;
-        line-height: 1.4;
-        cursor: pointer;
-        transition: border-color 120ms ease-out;
-        text-decoration: none;
-    }}
-    .btn-secondary:hover {{
-        border-color: {TOKENS['--ink']};
-    }}
-    .btn-text {{
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 8px;
-        background: transparent;
-        color: {TOKENS['--muted']};
-        border: none;
-        border-radius: {TOKENS['--radius']};
-        font-size: 13px;
-        font-weight: 400;
-        cursor: pointer;
-        text-decoration: underline;
-        transition: color 120ms ease-out;
-    }}
-    .btn-text:hover {{
-        color: {TOKENS['--ink']};
-    }}
-
-    /* ── Cards / sections ─────────────────────────────────────────────────── */
-    .card {{
-        border: 1px solid {TOKENS['--line']};
-        border-radius: {TOKENS['--radius']};
-        padding: 24px;
-        margin-bottom: 16px;
-        background: {TOKENS['--paper']};
-    }}
-    .card-dim {{
-        background: {TOKENS['--paper-dim']};
-    }}
-
-    /* ── Hairline dividers ────────────────────────────────────────────────── */
-    hr {{
-        border: none;
-        border-top: 1px solid {TOKENS['--line']};
-        margin: 16px 0;
-    }}
-
-    /* ── Candidate row ────────────────────────────────────────────────────── */
-    .candidate-row {{
-        display: flex;
-        align-items: center;
-        padding: 16px 0;
-        border-bottom: 1px solid {TOKENS['--line']};
-        cursor: pointer;
-        transition: background 120ms ease-out;
-    }}
-    .candidate-row:hover {{
-        background: {TOKENS['--paper-dim']};
-    }}
-    .candidate-row:last-child {{
-        border-bottom: none;
-    }}
-    .candidate-row-name {{
-        flex: 1;
-        font-size: 15px;
-        font-weight: 700;
-        color: {TOKENS['--ink']};
-    }}
-    .candidate-row-summary {{
-        flex: 2;
-        font-size: 13px;
-        color: {TOKENS['--muted']};
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        padding: 0 16px;
-    }}
-    .candidate-row-chevron {{
-        color: {TOKENS['--muted-2']};
-        font-size: 15px;
-        margin-left: 8px;
-    }}
-
-    /* ── Stat blocks ──────────────────────────────────────────────────────── */
-    .stat-block {{
-        display: inline-flex;
-        flex-direction: column;
-        align-items: flex-start;
-        padding: 16px 24px;
-        border: 1px solid {TOKENS['--line']};
-        border-radius: {TOKENS['--radius']};
-        background: {TOKENS['--paper']};
-    }}
-    .stat-block-number {{
-        font-size: 28px;
-        font-weight: 700;
-        line-height: 1.2;
-        color: {TOKENS['--ink']};
-    }}
-    .stat-block-label {{
-        font-size: 13px;
-        font-weight: 400;
-        color: {TOKENS['--muted']};
-        margin-top: 4px;
-    }}
-
-    /* ── Progress bar ─────────────────────────────────────────────────────── */
-    .progress-bar {{
-        height: 4px;
-        background: {TOKENS['--line']};
-        border-radius: {TOKENS['--radius']};
-        overflow: hidden;
-        margin: 8px 0;
-    }}
-    .progress-bar-fill {{
-        height: 100%;
-        background: {TOKENS['--ink']};
-        border-radius: {TOKENS['--radius']};
-        transition: width 180ms ease-out;
-    }}
-
-    /* ── Step list (Processing screen) ────────────────────────────────────── */
-    .step-list {{
-        list-style: none;
-        padding: 0;
-        margin: 0;
-    }}
-    .step-item {{
-        display: flex;
-        align-items: center;
-        padding: 12px 0;
-        border-bottom: 1px solid {TOKENS['--line']};
-    }}
-    .step-item:last-child {{
-        border-bottom: none;
-    }}
-    .step-index {{
-        width: 32px;
-        font-size: 15px;
-        font-weight: 700;
-        color: {TOKENS['--muted-2']};
-        flex-shrink: 0;
-    }}
-    .step-label {{
-        flex: 1;
-        font-size: 15px;
-        font-weight: 400;
-        color: {TOKENS['--muted']};
-    }}
-    .step-label.active {{
-        font-weight: 700;
-        color: {TOKENS['--ink']};
-    }}
-    .step-label.done {{
-        color: {TOKENS['--ink']};
-    }}
-    .step-indicator {{
-        width: 20px;
-        height: 20px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        font-size: 13px;
-        color: {TOKENS['--muted-2']};
-    }}
-    .step-indicator.active {{
-        color: {TOKENS['--ink']};
-    }}
-    .step-indicator.done {{
-        color: {TOKENS['--ink']};
-    }}
-
-    /* ── Alert callout ────────────────────────────────────────────────────── */
-    .alert {{
-        border: 1px solid {TOKENS['--line']};
-        border-radius: {TOKENS['--radius']};
-        padding: 12px 16px;
-        margin-bottom: 16px;
-        font-size: 13px;
-        line-height: 1.5;
-    }}
-    .alert-warn {{
-        background: {TOKENS['--signal-warn-bg']};
-        border-color: transparent;
-    }}
-
-    /* ── Expandable section ───────────────────────────────────────────────── */
-    .expandable-header {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px 0;
-        cursor: pointer;
-        border-bottom: 1px solid {TOKENS['--line']};
-        font-size: 15px;
-        font-weight: 700;
-        color: {TOKENS['--ink']};
-        transition: color 120ms ease-out;
-    }}
-    .expandable-header:hover {{
-        color: {TOKENS['--muted']};
-    }}
-    .expandable-content {{
-        padding: 16px 0;
-        font-size: 15px;
-        line-height: 1.6;
-        color: {TOKENS['--ink']};
-    }}
-
-    /* ── Evidence list ────────────────────────────────────────────────────── */
-    .evidence-item {{
-        padding: 8px 0;
-        border-bottom: 1px solid {TOKENS['--line']};
-        font-size: 13px;
-        line-height: 1.5;
-        color: {TOKENS['--muted']};
-    }}
-    .evidence-item:last-child {{
-        border-bottom: none;
-    }}
-
-    /* ── Comparison grid ───────────────────────────────────────────────────── */
-    .comparison-grid {{
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 24px;
-    }}
-    .comparison-col {{
-        border: 1px solid {TOKENS['--line']};
-        border-radius: {TOKENS['--radius']};
-        padding: 24px;
-    }}
-
-    /* ── Export buttons ───────────────────────────────────────────────────── */
-    .export-row {{
-        display: flex;
-        gap: 16px;
-        margin-top: 24px;
-    }}
-
-    /* ── Override Streamlit defaults ──────────────────────────────────────── */
-    .stButton > button {{
-        border-radius: {TOKENS['--radius']} !important;
-        font-family: '{TOKENS['--font-family']}' !important;
+        font-family: 'Open Sans', sans-serif !important;
+        font-size: 52px !important;
         font-weight: 700 !important;
-        font-size: 15px !important;
-        padding: 8px 24px !important;
-        transition: opacity 120ms ease-out !important;
-    }}
-    .stButton > button[kind="primary"] {{
-        background: {TOKENS['--ink']} !important;
-        color: {TOKENS['--paper']} !important;
-        border: 1px solid {TOKENS['--ink']} !important;
-    }}
-    .stButton > button[kind="secondary"] {{
-        background: transparent !important;
-        color: {TOKENS['--ink']} !important;
-        border: 1px solid {TOKENS['--line']} !important;
-    }}
-    .stTextInput > div > div > input {{
-        border-radius: {TOKENS['--radius']} !important;
-        border: 1px solid {TOKENS['--line']} !important;
-        font-family: '{TOKENS['--font-family']}' !important;
-        font-size: 15px !important;
-    }}
-    .stFileUploader > div {{
-        border-radius: {TOKENS['--radius']} !important;
-        border: 1px dashed {TOKENS['--line']} !important;
-    }}
-    .stSelectbox > div > div {{
-        border-radius: {TOKENS['--radius']} !important;
-        border: 1px solid {TOKENS['--line']} !important;
+        letter-spacing: -0.04em !important;
+        line-height: 1.05 !important;
+        color: #0A0A0A !important;
+        margin-top: 24px !important;
+        margin-bottom: 16px !important;
     }}
 
-    /* ── Responsive: mobile ───────────────────────────────────────────────── */
-    @media (max-width: 768px) {{
-        .content {{
-            padding: 24px 20px;
-        }}
-        .masthead {{
-            padding: 0 20px;
-        }}
-        .candidate-row {{
-            flex-wrap: wrap;
-        }}
-        .candidate-row-summary {{
-            flex-basis: 100%;
-            padding: 8px 0 0 0;
-        }}
-        .comparison-grid {{
-            grid-template-columns: 1fr;
-        }}
-        .export-row {{
-            flex-direction: column;
-        }}
-        .stat-block {{
-            width: 100%;
-        }}
+    .eyebrow {{
+        font-family: 'Space Mono', monospace !important;
+        font-size: 11px !important;
+        font-weight: 500 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.1em !important;
+        color: #6B6B6B !important;
+        margin-bottom: 8px !important;
     }}
 
-    /* ── prefers-reduced-motion ────────────────────────────────────────────── */
-    @media (prefers-reduced-motion: reduce) {{
-        * {{
-            transition-duration: 0ms !important;
-            animation-duration: 0ms !important;
-        }}
-        .btn-primary, .btn-secondary, .candidate-row {{
-            transition: none !important;
-        }}
-        .progress-bar-fill {{
-            transition: none !important;
-        }}
+    [data-testid="stWidgetLabel"] p {{
+        font-family: 'Space Mono', monospace !important;
+        font-size: 20px !important; 
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        color: #0A0A0A !important;
+        margin-bottom: 12px !important;
     }}
+
+    /* ── Sharp Input Workspace Fields ─────────────────────────────────────── */
+    .stTextInput input, .stTextArea textarea {{
+        background-color: #FFFFFF !important;
+        border: 1px solid #E4E4E0 !important;
+        border-radius: 0px !important;
+        padding: 16px !important;
+        font-size: 14px !important;
+        transition: border-color 150ms ease !important;
+    }}
+    
+    .stTextInput input:focus, .stTextArea textarea:focus {{
+        border-color: #0A0A0A !important;
+    }}
+
+    /* ── Custom File Dropzone UI ─────────────────────────────────────────── */
+    [data-testid="stFileUploader"] > section {{
+        background-color: #FFFFFF !important;
+        border: 1px dashed #D4D4CE !important;
+        border-radius: 0px !important;
+        padding: 24px !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 16px !important;
+    }}
+
+    [data-testid="stFileUploader"] [data-testid="stCaptionContainer"] p {{
+        font-family: 'Space Mono', monospace !important;
+        font-size: 14px !important; /* Bumped up for clean technical scanning */
+        color: #6B6B6B !important;
+    }}
+
+    [data-testid="stFileUploader"] button[data-testid="baseButton-secondary"] {{
+        background-color: #0A0A0A !important;
+        color: #FFFFFF !important;
+        border: 1px solid #0A0A0A !important;
+        border-radius: 0px !important;
+        font-family: 'Space Mono', monospace !important;
+        font-size: 11px !important;
+        text-transform: uppercase !important;
+        padding: 8px 16px !important;
+        height: auto !important;
+    }}
+
+    /* ── Clean Call-To-Action Block Button ────────────────────────────────── */
+    .stButton button {{
+        background-color: #0A0A0A !important;
+        color: #FFFFFF !important;
+        border: 1px solid #0A0A0A !important;
+        border-radius: 0px !important;
+        font-family: 'Space Mono', monospace !important;
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.1em !important;
+        padding: 16px 40px !important;
+        width: 100% !important;
+        transition: all 150ms ease !important;
+        box-shadow: 4px 4px 0px rgba(0,0,0,0.05) !important;
+    }}
+
+    .stButton button:hover {{
+        background-color: #1A1A1A !important;
+        color: #FFFFFF !important;
+        transform: translate(1px, 1px) !important;
+        box-shadow: 2px 2px 0px rgba(0,0,0,0.02) !important;
+    }}
+
+    /* Hide base boilerplate chrome elements */
+    header[data-testid="stHeader"], [data-testid="stDecoration"] {{
+        display: none !important;
+    }}
+    </style>
     """
